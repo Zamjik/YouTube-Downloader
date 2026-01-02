@@ -1,7 +1,7 @@
 import os
 import logging
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 
 # Настройка логирования
@@ -28,7 +28,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         '📖 Как пользоваться:\n\n'
         '1. Скопируй ссылку на YouTube видео\n'
         '2. Отправь мне ссылку\n'
-        '3. Жди, пока я скачаю видео\n'
+        '3. Выбери качество\n'
         '4. Получи свое видео!\n\n'
         'Поддерживаемые форматы ссылок:\n'
         '• https://youtube.com/watch?v=...\n'
@@ -36,7 +36,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик скачивания видео"""
+    """Обработчик получения ссылки на видео"""
     url = update.message.text.strip()
     
     # Проверка, что это ссылка на YouTube
@@ -50,17 +50,15 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Уведомление о начале обработки
     status_message = await update.message.reply_text('⏳ Получаю информацию о видео...')
     
-    # Настройки для yt-dlp
+    # Настройки для получения информации
     ydl_opts = {
-        'format': 'best[filesize<50M]',
-        'outtmpl': '%(id)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
     }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Сначала получаем информацию БЕЗ скачивания
+            # Получаем информацию БЕЗ скачивания
             logger.info(f"Получение информации: {url}")
             info = ydl.extract_info(url, download=False)
             
@@ -76,13 +74,63 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Форматирование количества просмотров
             views_str = f"{view_count:,}" if view_count else "Неизвестно"
             
+            # Получение доступных форматов
+            formats = info.get('formats', [])
+            available_qualities = set()
+            
+            for fmt in formats:
+                height = fmt.get('height')
+                if height and fmt.get('vcodec') != 'none':  # Только видео форматы
+                    available_qualities.add(height)
+            
+            # Сортируем качества по убыванию
+            sorted_qualities = sorted(available_qualities, reverse=True)
+            
+            # Создаем кнопки выбора качества
+            keyboard = []
+            quality_labels = {
+                2160: "4K (2160p)",
+                1440: "2K (1440p)",
+                1080: "Full HD (1080p)",
+                720: "HD (720p)",
+                480: "SD (480p)",
+                360: "360p",
+                240: "240p",
+                144: "144p"
+            }
+            
+            for quality in sorted_qualities:
+                if quality >= 144:  # Показываем только от 144p и выше
+                    label = quality_labels.get(quality, f"{quality}p")
+                    # Сохраняем URL в callback_data
+                    callback_data = f"quality_{quality}_{url}"
+                    # Ограничиваем длину callback_data (max 64 байта)
+                    if len(callback_data) > 64:
+                        # Сохраняем URL в context для длинных ссылок
+                        video_id = info.get('id', 'video')
+                        context.user_data[video_id] = url
+                        callback_data = f"quality_{quality}_{video_id}"
+                    
+                    keyboard.append([InlineKeyboardButton(label, callback_data=callback_data)])
+            
+            # Добавляем кнопку "Лучшее качество"
+            best_callback = f"quality_best_{url}"
+            if len(best_callback) > 64:
+                video_id = info.get('id', 'video')
+                context.user_data[video_id] = url
+                best_callback = f"quality_best_{video_id}"
+            
+            keyboard.insert(0, [InlineKeyboardButton("⭐ Лучшее качество (авто)", callback_data=best_callback)])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             # Отправка превью с информацией
             preview_text = (
                 f"🎬 <b>{title}</b>\n\n"
                 f"👤 Автор: {uploader}\n"
                 f"⏱ Длительность: {duration_str}\n"
                 f"👁 Просмотров: {views_str}\n\n"
-                f"⬇️ Начинаю скачивание..."
+                f"📹 Выберите качество для скачивания:"
             )
             
             if thumbnail_url:
@@ -90,50 +138,118 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_photo(
                         photo=thumbnail_url,
                         caption=preview_text,
-                        parse_mode='HTML'
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
                     )
                 except:
-                    await update.message.reply_text(preview_text, parse_mode='HTML')
+                    await update.message.reply_text(
+                        preview_text, 
+                        parse_mode='HTML',
+                        reply_markup=reply_markup
+                    )
             else:
-                await update.message.reply_text(preview_text, parse_mode='HTML')
+                await update.message.reply_text(
+                    preview_text, 
+                    parse_mode='HTML',
+                    reply_markup=reply_markup
+                )
             
             await status_message.delete()
             
-            # Теперь скачиваем видео
-            logger.info(f"Скачивание: {url}")
+    except Exception as e:
+        error_message = str(e)
+        logger.error(f"Ошибка при получении информации: {error_message}")
+        await status_message.edit_text(
+            f'❌ Произошла ошибка:\n\n{error_message[:200]}'
+        )
+
+async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик выбора качества"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Парсим callback_data
+    data_parts = query.data.split('_', 2)
+    quality = data_parts[1]
+    url_or_id = data_parts[2]
+    
+    # Проверяем, это URL или ID
+    if url_or_id.startswith('http'):
+        url = url_or_id
+    else:
+        # Получаем URL из context
+        url = context.user_data.get(url_or_id)
+        if not url:
+            await query.edit_message_caption(
+                caption="❌ Ошибка: ссылка не найдена. Попробуйте отправить ссылку заново."
+            )
+            return
+    
+    await query.edit_message_caption(
+        caption=f"⏳ Скачиваю видео в качестве {quality}..."
+    )
+    
+    # Настройки для скачивания
+    if quality == 'best':
+        format_selector = 'best[filesize<50M]'
+        quality_label = "Лучшее доступное"
+    else:
+        format_selector = f'bestvideo[height<={quality}][filesize<50M]+bestaudio/best[height<={quality}][filesize<50M]'
+        quality_label = f"{quality}p"
+    
+    ydl_opts = {
+        'format': format_selector,
+        'outtmpl': '%(id)s.%(ext)s',
+        'quiet': True,
+        'no_warnings': True,
+        'merge_output_format': 'mp4',
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Скачивание: {url} в качестве {quality}")
             info = ydl.extract_info(url, download=True)
             
             filename = f"{info['id']}.{info['ext']}"
+            title = info.get('title', 'Видео')[:100]
             
-            # Определение качества
+            # Определение фактического качества
             height = info.get('height', 0)
-            if height >= 1080:
-                quality = "1080p (Full HD)"
+            if height >= 2160:
+                actual_quality = "4K (2160p)"
+            elif height >= 1440:
+                actual_quality = "2K (1440p)"
+            elif height >= 1080:
+                actual_quality = "1080p (Full HD)"
             elif height >= 720:
-                quality = "720p (HD)"
+                actual_quality = "720p (HD)"
             elif height >= 480:
-                quality = "480p"
+                actual_quality = "480p"
             elif height >= 360:
-                quality = "360p"
+                actual_quality = "360p"
             else:
-                quality = f"{height}p" if height else "Неизвестно"
+                actual_quality = f"{height}p" if height else quality_label
             
             # Отправка видео с подписью
             caption = (
-                f"📹 Качество: {quality}\n\n"
-                f"Бендер умница 🤖\n"
-                f"@iloveMyselfVeryMuchbot"
+                f"📹 Качество: {actual_quality}\n\n"
+                f"<a href='https://t.me/iloveMyselfVeryMuchbot'>Бендер умница 🤖</a>"
             )
             
             with open(filename, 'rb') as video_file:
-                await update.message.reply_video(
+                await query.message.reply_video(
                     video=video_file,
                     caption=caption,
-                    supports_streaming=True
+                    supports_streaming=True,
+                    parse_mode='HTML'
                 )
             
             # Удаление временного файла
             os.remove(filename)
+            
+            await query.edit_message_caption(
+                caption=f"✅ Видео успешно скачано!\n\n🎬 {title}"
+            )
             
             logger.info(f"Успешно отправлено: {title}")
             
@@ -141,20 +257,17 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         error_message = str(e)
         logger.error(f"Ошибка при скачивании: {error_message}")
         
-        # Обработка специфичных ошибок
         if 'too large' in error_message.lower() or 'filesize' in error_message.lower():
-            await status_message.edit_text(
-                '❌ Видео слишком большое!\n\n'
-                'Telegram ограничивает размер файлов до 50MB.'
+            await query.edit_message_caption(
+                caption='❌ Видео слишком большое!\n\nПопробуйте выбрать более низкое качество.'
             )
         elif 'private' in error_message.lower() or 'unavailable' in error_message.lower():
-            await status_message.edit_text(
-                '❌ Видео недоступно!\n\n'
-                'Возможно, оно приватное или было удалено.'
+            await query.edit_message_caption(
+                caption='❌ Видео недоступно!\n\nВозможно, оно приватное или было удалено.'
             )
         else:
-            await status_message.edit_text(
-                f'❌ Произошла ошибка при скачивании:\n\n{error_message[:200]}'
+            await query.edit_message_caption(
+                caption=f'❌ Произошла ошибка:\n\n{error_message[:150]}'
             )
 
 def main():
@@ -169,6 +282,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
+    application.add_handler(CallbackQueryHandler(quality_callback, pattern="^quality_"))
     
     # Запуск бота
     logger.info("🤖 Бот запущен и готов к работе!")

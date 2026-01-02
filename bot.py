@@ -189,13 +189,13 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=f"⏳ Скачиваю видео в качестве {quality}..."
     )
     
-    # Настройки для скачивания
+    # Настройки для скачивания - используем только уже объединенные форматы
     if quality == 'best':
-        format_selector = 'best[filesize<2000M]/bestvideo[filesize<2000M]+bestaudio/best'
+        format_selector = 'best[filesize<2000M]'
         quality_label = "Лучшее доступное"
     else:
-        # Используем форматы, которые уже содержат видео и аудио вместе
-        format_selector = f'best[height<={quality}][filesize<2000M]/bestvideo[height<={quality}][filesize<2000M]+bestaudio/best[height<={quality}]'
+        # Приоритет форматам с уже объединенным видео+аудио
+        format_selector = f'best[height<={quality}][filesize<2000M]'
         quality_label = f"{quality}p"
     
     ydl_opts = {

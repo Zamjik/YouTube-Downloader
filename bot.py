@@ -279,7 +279,7 @@ def main():
     # Создание приложения
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрация обработчиков
+    # Регистрация обработчиков 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))

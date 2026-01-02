@@ -1,5 +1,6 @@
 import os
 import logging
+import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
@@ -13,6 +14,27 @@ logger = logging.getLogger(__name__)
 
 # Получаем токен из переменных окружения
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+# Проверка наличия FFmpeg
+def check_ffmpeg():
+    """Проверяет, установлен ли FFmpeg"""
+    try:
+        result = subprocess.run(['ffmpeg', '-version'], 
+                              capture_output=True, 
+                              text=True, 
+                              timeout=5)
+        if result.returncode == 0:
+            logger.info("✅ FFmpeg установлен")
+            return True
+        else:
+            logger.warning("⚠️ FFmpeg не найден")
+            return False
+    except Exception as e:
+        logger.warning(f"⚠️ FFmpeg не доступен: {e}")
+        return False
+
+# Проверяем FFmpeg при запуске
+FFMPEG_AVAILABLE = check_ffmpeg()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -189,22 +211,47 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=f"⏳ Скачиваю видео в качестве {quality}..."
     )
     
-    # Настройки для скачивания БЕЗ объединения (не требует FFmpeg)
-    if quality == 'best':
-        # Только готовые форматы с видео+аудио вместе
-        format_selector = 'best[filesize<2000M]/best'
-        quality_label = "Лучшее доступное"
+    # Настройки для скачивания с учетом доступности FFmpeg
+    if FFMPEG_AVAILABLE:
+        # Если FFmpeg есть - можем объединять форматы
+        if quality == 'best':
+            format_selector = 'bestvideo[filesize<2000M]+bestaudio/best[filesize<2000M]/best'
+            quality_label = "Лучшее доступное"
+        else:
+            format_selector = f'bestvideo[height<={quality}][filesize<2000M]+bestaudio/best[height<={quality}][filesize<2000M]/best'
+            quality_label = f"{quality}p"
+        
+        ydl_opts = {
+            'format': format_selector,
+            'outtmpl': '%(id)s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+            'merge_output_format': 'mp4',
+        }
     else:
-        # Только готовые форматы для конкретного качества
-        format_selector = f'best[height<={quality}][filesize<2000M]/best[height<={quality}]/best'
-        quality_label = f"{quality}p"
-    
-    ydl_opts = {
-        'format': format_selector,
-        'outtmpl': '%(id)s.%(ext)s',
-        'quiet': True,
-        'no_warnings': True,
-    }
+        # Если FFmpeg нет - только готовые форматы с автопонижением
+        logger.warning(f"Скачивание без FFmpeg, качество может быть ниже запрошенного")
+        if quality == 'best':
+            format_selector = 'best[filesize<2000M]/best'
+            quality_label = "Лучшее доступное"
+        else:
+            q = int(quality)
+            fallback_qualities = []
+            
+            for fallback_q in [q, 720, 480, 360, 240, 144]:
+                if fallback_q not in fallback_qualities:
+                    fallback_qualities.append(fallback_q)
+            
+            format_parts = [f'best[height<={q}][filesize<2000M]' for q in fallback_qualities]
+            format_selector = '/'.join(format_parts) + '/best'
+            quality_label = f"{quality}p"
+        
+        ydl_opts = {
+            'format': format_selector,
+            'outtmpl': '%(id)s.%(ext)s',
+            'quiet': True,
+            'no_warnings': True,
+        }
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -232,8 +279,16 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 actual_quality = f"{height}p" if height else quality_label
             
             # Отправка видео с подписью
+            actual_height = info.get('height', 0)
+            requested_q = int(quality) if quality != 'best' else 0
+            
+            # Проверяем, совпадает ли запрошенное и фактическое качество
+            quality_note = ""
+            if requested_q > 0 and actual_height > 0 and actual_height < requested_q:
+                quality_note = f"\n⚠️ Запрошено: {requested_q}p (недоступно в готовом формате)"
+            
             caption = (
-                f"📹 Качество: {actual_quality}\n\n"
+                f"📹 Качество: {actual_quality}{quality_note}\n\n"
                 f"<a href='https://t.me/iloveMyselfVeryMuchbot'>Бендер умница 🤖</a>"
             )
             
@@ -279,7 +334,7 @@ def main():
     # Создание приложения
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Регистрация обработчиков 
+    # Регистрация обработчиков
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
@@ -287,6 +342,7 @@ def main():
     
     # Запуск бота
     logger.info("🤖 Бот запущен и готов к работе!")
+    logger.info(f"FFmpeg доступен: {'✅ Да' if FFMPEG_AVAILABLE else '❌ Нет (только готовые форматы)'}")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':

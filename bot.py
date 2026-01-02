@@ -47,12 +47,12 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    # Уведомление о начале скачивания
-    status_message = await update.message.reply_text('⏳ Скачиваю видео...')
+    # Уведомление о начале обработки
+    status_message = await update.message.reply_text('⏳ Получаю информацию о видео...')
     
     # Настройки для yt-dlp
     ydl_opts = {
-        'format': 'best[filesize<50M]',  # Ограничение для Telegram
+        'format': 'best[filesize<50M]',
         'outtmpl': '%(id)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
@@ -60,27 +60,80 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            # Получение информации о видео
+            # Сначала получаем информацию БЕЗ скачивания
+            logger.info(f"Получение информации: {url}")
+            info = ydl.extract_info(url, download=False)
+            
+            title = info.get('title', 'Видео')[:200]
+            thumbnail_url = info.get('thumbnail')
+            duration = info.get('duration', 0)
+            view_count = info.get('view_count', 0)
+            uploader = info.get('uploader', 'Неизвестно')
+            
+            # Форматирование длительности
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "Неизвестно"
+            
+            # Форматирование количества просмотров
+            views_str = f"{view_count:,}" if view_count else "Неизвестно"
+            
+            # Отправка превью с информацией
+            preview_text = (
+                f"🎬 <b>{title}</b>\n\n"
+                f"👤 Автор: {uploader}\n"
+                f"⏱ Длительность: {duration_str}\n"
+                f"👁 Просмотров: {views_str}\n\n"
+                f"⬇️ Начинаю скачивание..."
+            )
+            
+            if thumbnail_url:
+                try:
+                    await update.message.reply_photo(
+                        photo=thumbnail_url,
+                        caption=preview_text,
+                        parse_mode='HTML'
+                    )
+                except:
+                    await update.message.reply_text(preview_text, parse_mode='HTML')
+            else:
+                await update.message.reply_text(preview_text, parse_mode='HTML')
+            
+            await status_message.delete()
+            
+            # Теперь скачиваем видео
             logger.info(f"Скачивание: {url}")
             info = ydl.extract_info(url, download=True)
             
             filename = f"{info['id']}.{info['ext']}"
-            title = info.get('title', 'Видео')[:200]  # Ограничение длины названия
             
-            # Обновление статуса
-            await status_message.edit_text('📤 Отправляю видео...')
+            # Определение качества
+            height = info.get('height', 0)
+            if height >= 1080:
+                quality = "1080p (Full HD)"
+            elif height >= 720:
+                quality = "720p (HD)"
+            elif height >= 480:
+                quality = "480p"
+            elif height >= 360:
+                quality = "360p"
+            else:
+                quality = f"{height}p" if height else "Неизвестно"
             
-            # Отправка видео пользователю
+            # Отправка видео с подписью
+            caption = (
+                f"📹 Качество: {quality}\n\n"
+                f"Бендер умница 🤖\n"
+                f"@iloveMyselfVeryMuchbot"
+            )
+            
             with open(filename, 'rb') as video_file:
                 await update.message.reply_video(
                     video=video_file,
-                    caption=f"🎬 {title}",
+                    caption=caption,
                     supports_streaming=True
                 )
             
             # Удаление временного файла
             os.remove(filename)
-            await status_message.delete()
             
             logger.info(f"Успешно отправлено: {title}")
             

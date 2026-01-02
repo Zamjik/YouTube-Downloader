@@ -19,7 +19,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         '👋 Привет! Я бот для скачивания видео с YouTube.\n\n'
         'Просто отправь мне ссылку на видео, и я скачаю его для тебя.\n\n'
-        '⚠️ Ограничение: видео должно быть меньше 50MB из-за лимитов Telegram.'
+        '⚠️ Ограничение: видео должно быть меньше 2GB (Telegram лимит)'
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,11 +191,11 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Настройки для скачивания
     if quality == 'best':
-        format_selector = 'best[filesize<50M]/bestvideo[filesize<50M]+bestaudio[filesize<10M]/best'
+        format_selector = 'best[filesize<2000M]/bestvideo[filesize<2000M]+bestaudio/best'
         quality_label = "Лучшее доступное"
     else:
         # Используем форматы, которые уже содержат видео и аудио вместе
-        format_selector = f'best[height<={quality}][filesize<50M]/bestvideo[height<={quality}][ext=mp4][filesize<50M]+bestaudio[ext=m4a][filesize<10M]/best[height<={quality}]'
+        format_selector = f'best[height<={quality}][filesize<2000M]/bestvideo[height<={quality}][filesize<2000M]+bestaudio/best[height<={quality}]'
         quality_label = f"{quality}p"
     
     ydl_opts = {

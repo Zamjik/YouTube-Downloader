@@ -189,20 +189,14 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=f"⏳ Скачиваю видео в качестве {quality}..."
     )
     
-    # Настройки для скачивания с множественными fallback вариантами
+    # Настройки для скачивания БЕЗ объединения (не требует FFmpeg)
     if quality == 'best':
-        # Пробуем разные варианты от лучшего к худшему
-        format_selector = 'bestvideo[filesize<2000M]+bestaudio/best[filesize<2000M]/bestvideo+bestaudio/best'
+        # Только готовые форматы с видео+аудио вместе
+        format_selector = 'best[filesize<2000M]/best'
         quality_label = "Лучшее доступное"
     else:
-        # Множественные варианты для конкретного качества
-        format_selector = (
-            f'bestvideo[height<={quality}][filesize<2000M]+bestaudio/'
-            f'best[height<={quality}][filesize<2000M]/'
-            f'bestvideo[height<={quality}]+bestaudio/'
-            f'best[height<={quality}]/'
-            f'best'
-        )
+        # Только готовые форматы для конкретного качества
+        format_selector = f'best[height<={quality}][filesize<2000M]/best[height<={quality}]/best'
         quality_label = f"{quality}p"
     
     ydl_opts = {
@@ -210,7 +204,6 @@ async def quality_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         'outtmpl': '%(id)s.%(ext)s',
         'quiet': True,
         'no_warnings': True,
-        'merge_output_format': 'mp4',
     }
     
     try:
